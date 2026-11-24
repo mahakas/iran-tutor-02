@@ -7,6 +7,7 @@ import BookGradePicker from "@/components/BookGradePicker";
 import {
   MASTERY_STATUS_LABEL,
   OBJECTIVE_MASTERY_STATUS_LABEL,
+  nextChapterStep,
   phase5ErrorMessage,
   toPersianDigits,
   type MasteryTree,
@@ -175,6 +176,16 @@ export default function MasteryWorkspace() {
                     {chapter.locked_reason === "previous_chapter_not_mastered" ? " · قفل تا تسلط فصل قبل" : ""}
                     {chapter.locked_reason === "admin_locked" ? " · قفل توسط مدیر" : ""}
                   </div>
+                  {(() => {
+                    const next = nextChapterStep(chapter);
+                    if (!next) return null;
+                    return (
+                      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginTop: 8, fontSize: 13 }}>
+                        <span style={{ opacity: 0.8 }} role="note">گام بعدی: {next.reason}.</span>
+                        <Link href={next.href} className="btn-ghost" style={{ textDecoration: "none" }}>{next.label}</Link>
+                      </div>
+                    );
+                  })()}
                 </li>
               );
             })}

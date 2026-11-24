@@ -218,6 +218,12 @@ def test_local_environment_never_blocks_weak_secrets():
 def test_settings_read_environment_alias(monkeypatch):
     from app.core.config import Settings
 
+    # Phase 04C-A: this test must be hermetic — a QA/backend .env file on disk
+    # (e.g. APP_ENV=local for the browser-QA stack) must not override the
+    # process environment the alias behaviour is testing.
+    monkeypatch.setattr(
+        Settings, "model_config", {**Settings.model_config, "env_file": None}
+    )
     monkeypatch.setenv("ENVIRONMENT", "production")
     assert Settings().app_env == "production"
     monkeypatch.delenv("ENVIRONMENT")

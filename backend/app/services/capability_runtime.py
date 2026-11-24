@@ -265,6 +265,23 @@ async def enforce_capability_call(
         await enforce_ai_quota(session, user=user, feature_key=feature_key)
 
 
+
+def _detached_accounting(session: AsyncSession | None, requested: bool) -> bool:
+    """Detach audit/quota writes only where the race exists (Phase 04C).
+
+    The user_quotas unique-index entry held open across provider network calls
+    is a PostgreSQL behaviour; SQLite tests use a single-writer database where
+    a second write session would just deadlock, so there the audit stays in
+    the caller's transaction.
+    """
+    if not requested or session is None:
+        return False
+    try:
+        return session.bind.dialect.name == "postgresql"
+    except Exception:  # noqa: BLE001 - defensive: fall back to same-transaction
+        return False
+
+
 async def run_capability_text(
     *,
     session: AsyncSession | None,
@@ -283,6 +300,7 @@ async def run_capability_text(
     model: str | None = None,
     user: User | None = None,
     enforce: bool = True,
+    audit_in_own_transaction: bool = False,
 ) -> tuple[GatewayResult, list[LearningBlock], Skill | None]:
     """Execute one capability call: skill prompt -> gateway -> typed blocks.
 
@@ -323,6 +341,7 @@ async def run_capability_text(
         ],
         model=model,
         session=session,
+        audit_in_own_transaction=_detached_accounting(session, audit_in_own_transaction),
     )
     answer = result.content if isinstance(result.content, str) else str(result.content)
     blocks = blocks_from_answer(answer, citations)
@@ -468,6 +487,7 @@ async def run_capability_speech(
     book_id: int | None = None,
     user: User | None = None,
     enforce: bool = True,
+    audit_in_own_transaction: bool = False,
 ) -> tuple[bytes, GatewayResult]:
     """Text-to-speech through the runtime: capability/quota gate -> gateway -> audit.
 
@@ -483,4 +503,7 @@ async def run_capability_speech(
         book_id=book_id,
         textbook_strict=False,
     )
-    return await speech_via_gateway(ctx=ctx, text=text, voice=voice, session=session)
+    return await speech_via_gateway(
+        ctx=ctx, text=text, voice=voice, session=session,
+        audit_in_own_transaction=_detached_accounting(session, audit_in_own_transaction),
+    )

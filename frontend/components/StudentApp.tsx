@@ -1492,6 +1492,12 @@ export default function StudentApp() {
           void loadExamHistory();
           void refreshAccount();
         }}
+        onStartNewExam={() => {
+          setActiveExam(null);
+          void loadExamHistory();
+          void refreshAccount();
+          setExamSetupOpen(true);
+        }}
       />
     );
   }

@@ -29,6 +29,7 @@ from typing import Any
 from fastapi import HTTPException
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
@@ -838,6 +839,7 @@ async def _speech_for_piece(
         book_id=episode.book_id,
         user=user,
         enforce=True,
+        audit_in_own_transaction=True,
     )
     extension = ".wav" if audio_assembly.is_wav(audio) else ".mp3"
     path = Path(__file__).resolve().parents[2] / "storage" / "tts_cache" / key[:2] / f"{key}{extension}"
@@ -856,6 +858,24 @@ async def _speech_for_piece(
             hit_count=0,
         )
     )
+    try:
+        await session.flush()
+    except IntegrityError:
+        # Phase 04C (PostgreSQL QA): the cache row can already exist — a stale
+        # row whose file was pruned from disk, or a concurrent worker that
+        # synthesised the same text first. Reuse that row and make sure its
+        # file is actually present; never fail the episode over the cache.
+        await session.rollback()
+        entry = await session.scalar(
+            select(AudioCacheEntry).where(AudioCacheEntry.cache_key == key)
+        )
+        if entry is None:
+            raise
+        existing_path = Path(entry.file_path)
+        existing_path.parent.mkdir(parents=True, exist_ok=True)
+        if not existing_path.is_file():
+            existing_path.write_bytes(audio)
+        return existing_path
     return path
 
 
@@ -927,6 +947,7 @@ async def _run_generation(session: AsyncSession, user: User, episode: PodcastEpi
             citations=list(snapshot.get("citations") or []),
             rag_hit_count=len(sources),
             extra_system=memory_context or None,
+            audit_in_own_transaction=True,
         )
         try:
             script = validate_script(result.content if isinstance(result.content, str) else "", format=episode.format)
@@ -950,6 +971,7 @@ async def _run_generation(session: AsyncSession, user: User, episode: PodcastEpi
                 textbook_strict=True,
                 citations=list(snapshot.get("citations") or []),
                 rag_hit_count=len(sources),
+                audit_in_own_transaction=True,
             )
             script = validate_script(retry.content if isinstance(retry.content, str) else "", format=episode.format)
 

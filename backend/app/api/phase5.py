@@ -66,21 +66,43 @@ async def list_mistakes(
     status: str | None = Query(default=None, max_length=16),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
+    book_id: int | None = Query(default=None, gt=0),
+    chapter_number: int | None = Query(default=None, ge=1, le=99),
+    error_tag: str | None = Query(default=None, max_length=16),
     current_user: User = Depends(require_student),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
     await check_capability_access(session, "mistake_bank", current_user)
-    return await mbs.list_items(session, current_user, status=status, limit=limit, offset=offset)
+    return await mbs.list_items(
+        session,
+        current_user,
+        status=status,
+        limit=limit,
+        offset=offset,
+        book_id=book_id,
+        chapter_number=chapter_number,
+        error_tag=error_tag,
+    )
 
 
 @router.get("/api/v1/mistakes/practice-set")
 async def mistake_practice_set(
     limit: int = Query(default=5, ge=1, le=20),
+    book_id: int | None = Query(default=None, gt=0),
+    chapter_number: int | None = Query(default=None, ge=1, le=99),
+    error_tag: str | None = Query(default=None, max_length=16),
     current_user: User = Depends(require_student),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
     await check_capability_access(session, "mistake_bank", current_user)
-    return await mbs.practice_set(session, current_user, limit=limit)
+    return await mbs.practice_set(
+        session,
+        current_user,
+        limit=limit,
+        book_id=book_id,
+        chapter_number=chapter_number,
+        error_tag=error_tag,
+    )
 
 
 @router.post("/api/v1/mistakes/{item_id}/answer")

@@ -327,6 +327,66 @@ describe("PodcastWorkspace", () => {
     );
   });
 
+  it("04C: the detail big button toggles pause for the current episode instead of re-loading it", async () => {
+    // Phase 04C root-cause fix: the big button showed a pause icon/label while
+    // playing but actually re-loaded the episode, so it never paused. It must
+    // toggle the global player when the episode is current.
+    const audioInstances: HTMLAudioElement[] = [];
+    const CapturedAudio = function () {
+      const element = document.createElement("audio");
+      audioInstances.push(element);
+      return element;
+    } as unknown as typeof Audio;
+    vi.stubGlobal("Audio", CapturedAudio);
+
+    const detailed = episode();
+    const audioBlob = new Blob([new Uint8Array([1, 2, 3])], { type: "audio/mpeg" });
+    const calls = installAuth({
+      "GET /api/v1/podcasts": () => ({ items: [detailed] }),
+      "GET /api/v1/podcasts/config": () => CONFIG,
+      "GET /api/v1/podcasts/11": () => detailed,
+      "GET /api/v1/podcasts/11/audio": () => new Response(audioBlob, { headers: { "Content-Type": "audio/mpeg" } }),
+    });
+    render(
+      <PodcastPlayerProvider>
+        <PodcastWorkspace />
+      </PodcastPlayerProvider>,
+    );
+
+    await screen.findByText("پادکست حرکت بر خط راست");
+    await userEvent.click(screen.getAllByRole("button", { name: /پخش/ })[0]);
+    await screen.findByLabelText("پخش‌کنندهٔ پادکست");
+    const el = audioInstances[0];
+    // jsdom does not track playing state, so mirror the browser's paused flag
+    // (the toggle branches on audio.paused).
+    let playingFlag = false;
+    Object.defineProperty(el, "paused", { configurable: true, get: () => !playingFlag });
+    el.dispatchEvent(new Event("play")); // the browser would emit this after play()
+    playingFlag = true;
+    // Playing: both the mini toggle and the big button show the pause action.
+    await waitFor(() => expect(screen.getByRole("button", { name: "توقف پخش" })).toBeInTheDocument());
+    await userEvent.click(screen.getByRole("button", { name: /جزئیات/ }));
+    const bigPlay = await screen.findByRole("button", { name: "توقف" });
+    expect(bigPlay).toHaveClass("pc-big-play");
+
+    // Clicking the big "توقف" button must PAUSE the current episode...
+    const pauseSpy = window.HTMLMediaElement.prototype.pause as ReturnType<typeof vi.fn>;
+    await userEvent.click(bigPlay);
+    expect(pauseSpy).toHaveBeenCalled();
+    playingFlag = false;
+    el.dispatchEvent(new Event("pause")); // the browser emits pause after pause()
+    // ...and must NOT re-fetch the audio (it used to call load() again).
+    expect(calls.filter((call) => call.url === "/api/v1/podcasts/11/audio").length).toBe(1);
+    expect(screen.getAllByRole("button", { name: "پخش" }).length).toBeGreaterThan(0);
+
+    // Clicking again resumes playback without another fetch.
+    const playSpy = window.HTMLMediaElement.prototype.play as ReturnType<typeof vi.fn>;
+    const playsBefore = playSpy.mock.calls.length;
+    await userEvent.click(screen.getAllByRole("button", { name: "پخش" })[0]);
+    expect(playSpy.mock.calls.length).toBeGreaterThan(playsBefore);
+    expect(calls.filter((call) => call.url === "/api/v1/podcasts/11/audio").length).toBe(1);
+  });
+
   it("shows the disabled state when the capability is off", async () => {
     capabilityGranted = new Set(["chat"]);
     installAuth({});

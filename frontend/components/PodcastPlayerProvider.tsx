@@ -172,6 +172,14 @@ export default function PodcastPlayerProvider({ children }: { children: ReactNod
       element.addEventListener("pause", () => {
         isPlayingRef.current = false;
         setIsPlaying(false);
+        if (element.ended) {
+          // The pause that accompanies the end of the file (Chromium fires
+          // pause before ended) must not re-save a finished position after
+          // the 'ended' handler has cleared the record.
+          clearSavedRef.current();
+          syncPositionStateRef.current();
+          return;
+        }
         // Pause is a deliberate stop: always write the last known position.
         persistRef.current({ force: true, wasPlaying: false });
         syncPositionStateRef.current();
@@ -400,8 +408,10 @@ export default function PodcastPlayerProvider({ children }: { children: ReactNod
           let restored = saved.position;
           if (dur > 0) restored = Math.min(restored, dur);
           if (dur > 0 && saved.position >= dur - FINISHED_EPSILON_SECONDS) {
-            // The episode had effectively finished: start fresh next time.
+            // The episode had effectively finished: start fresh next time and
+            // drop the now-pointless "continue" banner.
             clearSavedPlayback(userId);
+            setRestoreNotice(false);
             restored = 0;
           }
           audio.currentTime = restored;

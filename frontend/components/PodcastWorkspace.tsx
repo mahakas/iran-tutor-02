@@ -937,6 +937,19 @@ function PodcastDetail({ detail, onBack, onRefresh, onPlay, onRetry, onCancelJob
     player.seek(time);
   }
 
+  function toggleOrPlay() {
+    // When this episode is already loaded in the global player, these buttons
+    // are a play/pause toggle — their icon and label say so. Re-loading via
+    // onPlay() would keep playing, so the "توقف" label never actually paused
+    // (Phase 04C: root cause of the mislabelled wasPlaying evidence in the
+    // Phase 04B report).
+    if (isCurrent) {
+      player.toggle();
+      return;
+    }
+    onPlay();
+  }
+
   return (
     <div className="pc-detail" dir="rtl">
       <header className="fc-toolbar">
@@ -953,7 +966,7 @@ function PodcastDetail({ detail, onBack, onRefresh, onPlay, onRetry, onCancelJob
         </div>
         <div className="fc-toolbar-actions">
           {episode.status === "completed" && (
-            <button type="button" className="fc-btn primary" onClick={onPlay} disabled={!episode.has_audio}>
+            <button type="button" className="fc-btn primary" onClick={toggleOrPlay} disabled={!episode.has_audio}>
               {isCurrent && player.isPlaying ? <Pause size={16} /> : <Play size={16} />} پخش
             </button>
           )}
@@ -985,7 +998,7 @@ function PodcastDetail({ detail, onBack, onRefresh, onPlay, onRetry, onCancelJob
       {episode.status === "completed" && (
         <section className="pc-player" aria-label="پخش‌کنندهٔ پادکست">
           <div className="pc-player-main">
-            <button type="button" className="pc-big-play" onClick={onPlay} disabled={!episode.has_audio}
+            <button type="button" className="pc-big-play" onClick={toggleOrPlay} disabled={!episode.has_audio}
                     aria-label={isCurrent && player.isPlaying ? "توقف" : "پخش"}>
               {isCurrent && player.isPlaying ? <Pause size={26} /> : <Play size={26} />}
             </button>
