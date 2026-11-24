@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Eye, EyeOff, Globe2, ShieldCheck, Trash2 } from "lucide-react";
 import MathContent from "@/components/MathContent";
 
@@ -43,14 +43,35 @@ const SOURCE_LABELS: Record<string, string> = {
 
 /** Admin oversight of all flashcard decks, cards, review stats, and public-deck moderation. */
 export default function AdminFlashcardsPanel({ authHeaders, onUnauthorized }: Props) {
+  // Phase 06: deck filters persist in the URL (read on mount, mirrored on change).
+  const urlParams = useMemo(() => {
+    try {
+      return new URLSearchParams(window.location.search);
+    } catch {
+      return new URLSearchParams();
+    }
+  }, []);
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [decks, setDecks] = useState<AdminDeckRow[]>([]);
-  const [sourceFilter, setSourceFilter] = useState("");
-  const [publicOnly, setPublicOnly] = useState(false);
+  const [sourceFilter, setSourceFilter] = useState(urlParams.get("source") ?? "");
+  const [publicOnly, setPublicOnly] = useState(urlParams.get("public") === "true");
   const [openDeck, setOpenDeck] = useState<AdminDeckDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      if (sourceFilter) params.set("source", sourceFilter);
+      else params.delete("source");
+      if (publicOnly) params.set("public", "true");
+      else params.delete("public");
+      window.history.replaceState(null, "", `${window.location.pathname}?${params.toString()}`);
+    } catch {
+      // history is best-effort
+    }
+  }, [sourceFilter, publicOnly]);
 
   const load = useCallback(async () => {
     setLoading(true);

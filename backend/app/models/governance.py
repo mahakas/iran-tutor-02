@@ -96,7 +96,13 @@ class UserQuota(Base):
     """Per-user, per-window quota counters enforced before every AI call."""
 
     __tablename__ = "user_quotas"
-    __table_args__ = (Index("ix_user_quotas_user_id", "user_id"),)
+    # Phase 04C: one row per (user_id, feature_key) — duplicates split the
+    # counters and silently bypassed the gate. Guarded by the upsert in
+    # quota_service.increment_quota_counters and migration b5c6d7e8f9a0.
+    __table_args__ = (
+        Index("ux_user_quotas_user_feature", "user_id", "feature_key", unique=True),
+        Index("ix_user_quotas_user_id", "user_id"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False)

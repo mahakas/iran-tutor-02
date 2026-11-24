@@ -355,8 +355,16 @@ async def complete_text_via_gateway(
     temperature: float | None = None,
     session: AsyncSession | None = None,
     usage_hook: Callable[[int, int], None] | None = None,
+    audit_in_own_transaction: bool = False,
 ) -> GatewayResult:
-    """Plain-text completion using the selected provider's URL, key and fallback."""
+    """Plain-text completion using the selected provider's URL, key and fallback.
+
+    `audit_in_own_transaction` (Phase 04C): long-lived callers (the podcast
+    worker keeps one transaction open across script/TTS provider calls) write
+    the audit row and quota counters through a short dedicated session that
+    commits immediately, so a pending `user_quotas` unique-index entry can
+    never be held open across a network call.
+    """
     settings = get_settings()
 
     async def invoke(route: ResolvedRoute | None) -> str:
@@ -389,7 +397,7 @@ async def complete_text_via_gateway(
     audit_id = await _write_audit(
         ctx=ctx, route=route, model_name=effective_model, messages=messages,
         response_text=text, tokens_in=tokens_in, tokens_out=tokens_out,
-        latency_ms=latency, status=STATUS_SUCCESS, session=session,
+        latency_ms=latency, status=STATUS_SUCCESS, session=None if audit_in_own_transaction else session,
     )
     return GatewayResult(
         content=text, audit_id=audit_id,
@@ -667,6 +675,7 @@ async def speech_via_gateway(
     voice: str,
     session: AsyncSession | None = None,
     usage_hook: Callable[[int, int], None] | None = None,
+    audit_in_own_transaction: bool = False,
 ) -> tuple[bytes, GatewayResult]:
     """TTS through provider route and fallback; audio bytes are never audited."""
     settings = get_settings()
@@ -700,7 +709,7 @@ async def speech_via_gateway(
     audit_id = await _write_audit(
         ctx=ctx, route=route, model_name=effective_model, messages=messages,
         response_text=f"[audio {len(audio)} bytes]", tokens_in=tokens_in, tokens_out=0,
-        latency_ms=latency, status=STATUS_SUCCESS, session=session,
+        latency_ms=latency, status=STATUS_SUCCESS, session=None if audit_in_own_transaction else session,
     )
     return audio, GatewayResult(
         content=f"[audio {len(audio)} bytes]", audit_id=audit_id,

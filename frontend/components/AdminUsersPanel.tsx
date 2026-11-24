@@ -175,9 +175,30 @@ type PanelProps = {
 
 type FilterState = { q: string; role: string; status: string; plan: string; page: number };
 
+// Phase 06: filters used to be only *written* to the URL (replaceState) — a
+// refresh restored the tab but reset every filter. They are now also *read*
+// back on mount, so /admin?tab=users&q=…&status=…&page=… is a shareable,
+// refresh-safe working context. The server stays authoritative over values.
+function readFiltersFromUrl(): FilterState {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const page = Math.max(1, Number.parseInt(params.get("page") ?? "1", 10) || 1);
+    return {
+      q: params.get("q") ?? "",
+      role: params.get("role") ?? "all",
+      status: params.get("status") ?? "all",
+      plan: params.get("plan") ?? "all",
+      page,
+    };
+  } catch {
+    return { q: "", role: "all", status: "all", plan: "all", page: 1 };
+  }
+}
+
 export default function AdminUsersPanel({ authHeaders, onUnauthorized }: PanelProps) {
-  const [filters, setFilters] = useState<FilterState>({ q: "", role: "all", status: "all", plan: "all", page: 1 });
-  const [searchDraft, setSearchDraft] = useState("");
+  const initialFilters = readFiltersFromUrl();
+  const [filters, setFilters] = useState<FilterState>(initialFilters);
+  const [searchDraft, setSearchDraft] = useState(initialFilters.q);
   const [rows, setRows] = useState<AdminUserRow[]>([]);
   const [pagination, setPagination] = useState<Pagination | null>(null);
   const [summary, setSummary] = useState<ListResponse["summary"] | null>(null);

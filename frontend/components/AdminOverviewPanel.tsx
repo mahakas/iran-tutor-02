@@ -106,7 +106,7 @@ type AdminOverviewPanelProps = {
   loading: boolean;
   error: string;
   onRefresh: () => void;
-  onJumpToTab: (tab: "books" | "plans" | "users" | "integrations" | "appearance") => void;
+  onJumpToTab: (tab: "books" | "plans" | "users" | "integrations" | "appearance" | "observability") => void;
   onJumpToBookPage: (bookId: number, pageIndex?: number) => void;
   onJumpToUser: (userId: string) => void;
 };
@@ -300,16 +300,16 @@ export default function AdminOverviewPanel({
           <b>{fmtNum(counts.revenue_toman)} تومان</b>
           <small>مجموع توکن کل: {fmtNum(counts.tokens_used_total)}</small>
         </button>
-        <div className="admin-kpi-card">
+        <button type="button" className="admin-kpi-card interactive" onClick={() => onJumpToTab("observability")}>
           <span>مصرف توکن امروز</span>
           <b>{fmtNum(counts.tokens_used_today)} توکن</b>
-          <small>از ابتدای روز جاری (UTC)</small>
-        </div>
-        <div className="admin-kpi-card">
+          <small>از ابتدای روز جاری (UTC) · کلیک: گزارش مصرف AI</small>
+        </button>
+        <button type="button" className="admin-kpi-card interactive" onClick={() => onJumpToTab("observability")}>
           <span>گفت‌وگوها و آزمون‌ها</span>
           <b>{fmtNum(counts.chats_total)} / {fmtNum(counts.exams_total)}</b>
-          <small>گفت‌وگوی ذخیره / آزمون ساخته‌شده</small>
-        </div>
+          <small>گفت‌وگوی ذخیره / آزمون ساخته‌شده · کلیک: گزارش‌های AI</small>
+        </button>
         <div className="admin-kpi-card">
           <span>فایل‌های ذخیره‌شده کاربران</span>
           <b>{fmtNum(counts.user_files_count)} فایل</b>

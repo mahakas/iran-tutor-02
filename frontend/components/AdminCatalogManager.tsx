@@ -87,14 +87,30 @@ export default function AdminCatalogManager({ kind, authHeaders, onUnauthorized 
   );
   const apiEntity = ("baseEntity" in (ADMIN_CATALOG_VIEWS[kind] ?? {}) ? (ADMIN_CATALOG_VIEWS[kind] as { baseEntity: string }).baseEntity : kind);
 
+  // Phase 06 URL contract: page/q/sort/direction live in the URL of every
+  // /admin/education/* page — read back on mount and written on change, so a
+  // refresh or a shared link keeps the exact working context of the manager.
+  const urlParams = useMemo(() => {
+    try {
+      return new URLSearchParams(window.location.search);
+    } catch {
+      return new URLSearchParams();
+    }
+  }, []);
+  const urlPage = Math.max(1, Number.parseInt(urlParams.get("page") ?? "1", 10) || 1);
+  const urlSort = urlParams.get("sort") ?? "";
+  const urlDirection = urlParams.get("direction") === "desc" ? "desc" : "asc";
+
   const [rows, setRows] = useState<Row[]>([]);
   const [total, setTotal] = useState(0);
-  const [page, setPage] = useState(1);
+  const [page, setPage] = useState(urlPage);
   const [pageSize] = useState(25);
-  const [q, setQ] = useState("");
+  const [q, setQ] = useState(urlParams.get("q") ?? "");
   const [filters, setFilters] = useState<Record<string, string>>({});
-  const [sort, setSort] = useState(config.sortable[0] ?? "id");
-  const [direction, setDirection] = useState<"asc" | "desc">("asc");
+  const [sort, setSort] = useState(
+    urlSort && (config.sortable.includes(urlSort) || urlSort === "id") ? urlSort : config.sortable[0] ?? "id"
+  );
+  const [direction, setDirection] = useState<"asc" | "desc">(urlDirection);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -162,6 +178,23 @@ export default function AdminCatalogManager({ kind, authHeaders, onUnauthorized 
   useEffect(() => {
     queueMicrotask(() => void load());
   }, [load]);
+
+  // Mirror the working context back into the URL (best-effort, no history spam).
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      params.set("page", String(page));
+      if (q.trim()) params.set("q", q.trim());
+      else params.delete("q");
+      if (sort !== (config.sortable[0] ?? "id")) params.set("sort", sort);
+      else params.delete("sort");
+      if (direction !== "asc") params.set("direction", direction);
+      else params.delete("direction");
+      window.history.replaceState(null, "", `${window.location.pathname}?${params.toString()}`);
+    } catch {
+      // history is best-effort
+    }
+  }, [page, q, sort, direction, config]);
 
   const openCreate = () => {
     const initial: Record<string, string | boolean> = { ...("presetFilters" in config ? (config as { presetFilters: Record<string, string> }).presetFilters : {}) };

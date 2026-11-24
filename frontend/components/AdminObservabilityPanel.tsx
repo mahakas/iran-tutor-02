@@ -100,13 +100,48 @@ export default function AdminObservabilityPanel({
   const [detail, setDetail] = useState<AdminAuditDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
 
-  const [featureFilter, setFeatureFilter] = useState("");
-  const [statusFilter, setStatusFilter] = useState("");
-  const [flaggedOnly, setFlaggedOnly] = useState(false);
-  const [userFilter, setUserFilter] = useState("");
-  const [days, setDays] = useState(7);
-  const [page, setPage] = useState(0);
+  // Phase 06 URL contract: the observability working context (feature/status/
+  // flagged/user/days/page) is read back from the URL on mount and mirrored
+  // into it on change, so refresh and shared links keep the exact view.
+  const urlParams = useMemo(() => {
+    try {
+      return new URLSearchParams(window.location.search);
+    } catch {
+      return new URLSearchParams();
+    }
+  }, []);
+
+  const [featureFilter, setFeatureFilter] = useState(urlParams.get("feature") ?? "");
+  const [statusFilter, setStatusFilter] = useState(urlParams.get("status") ?? "");
+  const [flaggedOnly, setFlaggedOnly] = useState(urlParams.get("flagged") === "true");
+  const [userFilter, setUserFilter] = useState(urlParams.get("user") ?? "");
+  const [days, setDays] = useState(() => {
+    const parsed = Number.parseInt(urlParams.get("days") ?? "7", 10);
+    return parsed >= 1 && parsed <= 90 ? parsed : 7;
+  });
+  const [page, setPage] = useState(() => Math.max(0, Number.parseInt(urlParams.get("page") ?? "0", 10) || 0));
   const pageSize = 25;
+
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      if (featureFilter) params.set("feature", featureFilter);
+      else params.delete("feature");
+      if (statusFilter) params.set("status", statusFilter);
+      else params.delete("status");
+      if (flaggedOnly) params.set("flagged", "true");
+      else params.delete("flagged");
+      if (userFilter.trim()) params.set("user", userFilter.trim());
+      else params.delete("user");
+      if (days !== 7) params.set("days", String(days));
+      else params.delete("days");
+      if (page > 0) params.set("page", String(page));
+      else params.delete("page");
+      window.history.replaceState(null, "", `${window.location.pathname}?${params.toString()}`);
+    } catch {
+      // history is best-effort
+    }
+  }, [featureFilter, statusFilter, flaggedOnly, userFilter, days, page]);
 
   const handle = useCallback(
     (status: number) => {

@@ -1,7 +1,8 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertCircle, ArrowLeft, ArrowRight, Check, Clock3, LoaderCircle, Send } from "lucide-react";
+import { AlertCircle, ArrowLeft, ArrowRight, BookOpen, Check, ClipboardList, Clock3, Layers, LoaderCircle, RefreshCw, Send } from "lucide-react";
 import MathContent from "@/components/MathContent";
 import type { Exam, ExamReport } from "@/lib/types";
 
@@ -9,6 +10,8 @@ type Props = {
   exam: Exam;
   authHeaders?: Record<string, string>;
   onExit: () => void;
+  /** Opens the new-exam setup in the classroom after the report; optional for reuse. */
+  onStartNewExam?: () => void;
 };
 
 function formatTime(totalSeconds: number) {
@@ -28,7 +31,7 @@ function parseUtcMs(isoTimestamp: string): number {
   return Date.parse(hasTimezone ? isoTimestamp : `${isoTimestamp}Z`);
 }
 
-export default function ExamRunner({ exam, authHeaders, onExit }: Props) {
+export default function ExamRunner({ exam, authHeaders, onExit, onStartNewExam }: Props) {
   const [answers, setAnswers] = useState<Record<string, string>>(() => {
     const restored: Record<string, string> = {};
     for (const [key, value] of Object.entries(exam.submitted_answers ?? {})) {
@@ -110,6 +113,24 @@ export default function ExamRunner({ exam, authHeaders, onExit }: Props) {
           </div>
           <div className="report-stats">
             <div><b>{report.correct}</b><span>درست</span></div><div><b>{report.wrong}</b><span>غلط</span></div><div><b>{report.unanswered}</b><span>بی‌پاسخ</span></div>
+          </div>
+          <div className="report-actions" style={{ display: "flex", gap: 10, flexWrap: "wrap", marginInlineStart: 18 }}>
+            {report.wrong > 0 || report.unanswered > 0 ? (
+              <Link className="primary-button" href="/mistakes" style={{ display: "inline-flex", gap: 6, alignItems: "center", textDecoration: "none" }}>
+                <ClipboardList size={16} /> مرور اشتباهات در بانک اشتباهات
+              </Link>
+            ) : null}
+            {onStartNewExam ? (
+              <button className="outline-button" onClick={onStartNewExam} style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+                <RefreshCw size={16} /> تمرین دوباره
+              </button>
+            ) : null}
+            <Link className="outline-button" href={`/study/${exam.book_id}`} style={{ display: "inline-flex", gap: 6, alignItems: "center", textDecoration: "none" }}>
+              <BookOpen size={16} /> منبع کتاب
+            </Link>
+            <Link className="text-button" href="/mastery" style={{ display: "inline-flex", gap: 6, alignItems: "center", textDecoration: "none" }}>
+              <Layers size={16} /> شواهد تسلط
+            </Link>
           </div>
           <div className="review-list">
             <h2>مرور پاسخ‌ها</h2>

@@ -35,6 +35,7 @@ from app.core.runtime_config import (
     set_runtime_overrides,
 )
 from app.db.session import async_session_factory
+from app.services.admin_action_log import log_admin_action
 from app.services.curriculum_access import is_student_visible_book
 from app.models.auth import PaymentTransaction, Plan, TokenUsageLog, User, UserFile, UserSession
 from app.models.chat import ChatSession
@@ -1662,7 +1663,7 @@ async def get_admin_billing() -> dict[str, object]:
 
 
 @protected_router.put("/billing/settings")
-async def update_admin_billing_settings(body: BillingSettingsUpdateBody) -> dict[str, object]:
+async def update_admin_billing_settings(request: Request, body: BillingSettingsUpdateBody) -> dict[str, object]:
     async with async_session_factory() as session:
         billing = await get_or_init_billing_settings(session)
         billing.token_price_per_1k_toman = body.token_price_per_1k_toman
@@ -1672,6 +1673,17 @@ async def update_admin_billing_settings(body: BillingSettingsUpdateBody) -> dict
             billing.starter_storage_bytes = body.starter_storage_bytes
         await session.commit()
         await session.refresh(billing)
+        await log_admin_action(
+            session,
+            request,
+            action="billing.settings.update",
+            target="billing:settings",
+            payload={
+                "token_price_per_1k_toman": billing.token_price_per_1k_toman,
+                "starter_tokens": billing.starter_tokens,
+                "starter_duration_days": billing.starter_duration_days,
+            },
+        )
         return {
             "settings": {
                 "token_price_per_1k_toman": billing.token_price_per_1k_toman,
@@ -1683,7 +1695,7 @@ async def update_admin_billing_settings(body: BillingSettingsUpdateBody) -> dict
 
 
 @protected_router.put("/billing/plans/{plan_code}")
-async def update_admin_plan(plan_code: str, body: PlanUpdateBody) -> dict[str, object]:
+async def update_admin_plan(plan_code: str, request: Request, body: PlanUpdateBody) -> dict[str, object]:
     async with async_session_factory() as session:
         await get_or_init_plans(session)
         plan = await session.scalar(select(Plan).where(Plan.code == plan_code.strip()))
@@ -1706,6 +1718,13 @@ async def update_admin_plan(plan_code: str, body: PlanUpdateBody) -> dict[str, o
             plan.is_active = body.is_active
         await session.commit()
         await session.refresh(plan)
+        await log_admin_action(
+            session,
+            request,
+            action="billing.plan.update",
+            target=f"plan:{plan.code}",
+            payload={"changed_fields": sorted(fields)},
+        )
         return {"plan": serialize_plan(plan)}
 
 
@@ -2404,7 +2423,7 @@ class AdminBookPatchBody(BaseModel):
 
 
 @protected_router.patch("/books/{book_id}")
-async def update_admin_book(book_id: int, body: AdminBookPatchBody) -> dict[str, object]:
+async def update_admin_book(book_id: int, request: Request, body: AdminBookPatchBody) -> dict[str, object]:
     async with async_session_factory() as session:
         book = await session.get(Book, book_id)
         if book is None:
@@ -2454,6 +2473,18 @@ async def update_admin_book(book_id: int, body: AdminBookPatchBody) -> dict[str,
 
         await session.commit()
         await session.refresh(book)
+
+        await log_admin_action(
+            session,
+            request,
+            action="book.update",
+            target=f"book:{book.id}",
+            payload={
+                "changed_fields": sorted(fields),
+                "title": book.title,
+                "status_after": book.status.value if hasattr(book.status, "value") else str(book.status),
+            },
+        )
 
         grade_obj = await session.get(Grade, book.grade_id)
         major_obj = await session.get(Major, book.major_id) if book.major_id else None
@@ -2511,6 +2542,7 @@ async def reindex_admin_book(book_id: int) -> dict[str, object]:
 @protected_router.post("/books/{book_id}/reprocess")
 async def reprocess_admin_book(
     book_id: int,
+    request: Request,
     background_tasks: BackgroundTasks,
 ) -> dict[str, object]:
     settings = get_settings()
@@ -2550,6 +2582,14 @@ async def reprocess_admin_book(
         book.status = BookStatus.ingesting
         await session.commit()
 
+        await log_admin_action(
+            session,
+            request,
+            action="book.reprocess",
+            target=f"book:{book.id}",
+            payload={"title": book.title, "start_page": start_page, "end_page": end_page},
+        )
+
         from app.services import kb_ingestion_service
 
         job = await kb_ingestion_service.create_ingestion_job(
@@ -2582,6 +2622,7 @@ async def reprocess_admin_book(
 @protected_router.delete("/books/{book_id}")
 async def delete_admin_book(
     book_id: int,
+    request: Request,
     force: bool = Query(default=False),
 ) -> dict[str, object]:
     async with async_session_factory() as session:
@@ -2615,6 +2656,14 @@ async def delete_admin_book(
         await session.execute(delete(BookPage).where(BookPage.book_id == book_id))
         await session.delete(book)
         await session.commit()
+
+        await log_admin_action(
+            session,
+            request,
+            action="book.delete",
+            target=f"book:{book_id}",
+            payload={"title": book.title, "force": force, "chats_removed": chat_count, "exams_removed": exam_count},
+        )
 
     # Clean up storage & vector records best-effort
     try:
@@ -2740,6 +2789,7 @@ async def get_admin_system_settings(response: Response) -> dict[str, object]:
 @protected_router.put("/settings")
 async def update_admin_system_settings(
     body: AdminSettingsUpdateBody,
+    request: Request,
     response: Response,
 ) -> dict[str, object]:
     response.headers["Cache-Control"] = "no-store"
@@ -2769,12 +2819,27 @@ async def update_admin_system_settings(
 
     set_runtime_overrides(updated)
     await refresh_runtime_clients()
+    # Audit records which fields were changed — never their values, since
+    # runtime settings may include secret material.
+    async with async_session_factory() as audit_session:
+        await log_admin_action(
+            audit_session,
+            request,
+            action="settings.update",
+            target="settings:runtime",
+            payload={
+                "changed_fields": sorted(raw_patch.keys()),
+                "clear_secrets": bool(body.clear_secrets),
+                "clear_overrides": bool(body.clear_overrides),
+            },
+        )
     return serialize_admin_settings(get_base_settings(), get_settings(), updated)
 
 
 @protected_router.post("/settings/reset")
 async def reset_admin_system_settings(
     body: AdminSettingsResetBody,
+    request: Request,
     response: Response,
 ) -> dict[str, object]:
     response.headers["Cache-Control"] = "no-store"
@@ -2791,6 +2856,14 @@ async def reset_admin_system_settings(
 
     set_runtime_overrides(next_config)
     await refresh_runtime_clients()
+    async with async_session_factory() as audit_session:
+        await log_admin_action(
+            audit_session,
+            request,
+            action="settings.reset",
+            target="settings:runtime",
+            payload={"section": body.section, "cleared_fields": sorted(keys_to_remove)},
+        )
     return serialize_admin_settings(get_base_settings(), get_settings(), next_config)
 
 
@@ -3081,7 +3154,7 @@ async def list_ai_providers(session: AsyncSession = Depends(get_session)) -> dic
 
 @protected_router.post("/providers")
 async def create_ai_provider(
-    body: AiProviderCreateBody, session: AsyncSession = Depends(get_session)
+    body: AiProviderCreateBody, request: Request, session: AsyncSession = Depends(get_session)
 ) -> dict[str, object]:
     from app.services.ai_provider_service import (
         normalize_capabilities,
@@ -3108,12 +3181,21 @@ async def create_ai_provider(
     session.add(provider)
     await session.commit()
     await session.refresh(provider)
+    # Audit only non-secret metadata — the API key itself is never logged.
+    await log_admin_action(
+        session,
+        request,
+        action="provider.create",
+        target=f"provider:{provider.id}",
+        payload={"name": provider.name, "provider_type": provider.provider_type, "capabilities": provider.capabilities},
+    )
     return {"provider": serialize_provider(provider)}
 
 
 @protected_router.put("/providers/{provider_id}")
 async def update_ai_provider(
     provider_id: int,
+    request: Request,
     body: AiProviderUpdateBody,
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, object]:
@@ -3147,12 +3229,20 @@ async def update_ai_provider(
 
     await session.commit()
     await session.refresh(provider)
+    # Field names only — never the key material itself.
+    await log_admin_action(
+        session,
+        request,
+        action="provider.update",
+        target=f"provider:{provider.id}",
+        payload={"changed_fields": sorted(body.model_fields_set), "clear_api_key": bool(body.clear_api_key)},
+    )
     return {"provider": serialize_provider(provider)}
 
 
 @protected_router.delete("/providers/{provider_id}")
 async def delete_ai_provider(
-    provider_id: int, session: AsyncSession = Depends(get_session)
+    provider_id: int, request: Request, session: AsyncSession = Depends(get_session)
 ) -> dict[str, object]:
     provider = await session.get(AiProvider, provider_id)
     if provider is None:
@@ -3174,6 +3264,13 @@ async def delete_ai_provider(
         )
     await session.delete(provider)
     await session.commit()
+    await log_admin_action(
+        session,
+        request,
+        action="provider.delete",
+        target=f"provider:{provider_id}",
+        payload={"name": provider.name},
+    )
     return {"deleted": True, "id": provider_id}
 
 
@@ -3229,7 +3326,9 @@ async def list_feature_routes(session: AsyncSession = Depends(get_session)) -> d
 
 @protected_router.put("/routes")
 async def upsert_feature_route(
-    body: FeatureRouteBody, session: AsyncSession = Depends(get_session)
+    request: Request,
+    body: FeatureRouteBody,
+    session: AsyncSession = Depends(get_session),
 ) -> dict[str, object]:
     from app.services.ai_provider_service import ROUTABLE_FEATURE_KEYS, serialize_route
 
@@ -3291,12 +3390,23 @@ async def upsert_feature_route(
     route.is_active = body.is_active
     await session.commit()
     await session.refresh(route)
+    await log_admin_action(
+        session,
+        request,
+        action="route.set",
+        target=f"route:{body.feature_key}",
+        payload={
+            "provider_id": body.provider_id,
+            "model_name": body.model_name.strip(),
+            "fallback_provider_ids": fallback_ids,
+        },
+    )
     return {"route": serialize_route(route)}
 
 
 @protected_router.delete("/routes/{feature_key}")
 async def delete_feature_route(
-    feature_key: str, session: AsyncSession = Depends(get_session)
+    feature_key: str, request: Request, session: AsyncSession = Depends(get_session)
 ) -> dict[str, object]:
     route = await session.scalar(
         select(FeatureModelRoute).where(FeatureModelRoute.feature_key == feature_key)
@@ -3305,6 +3415,13 @@ async def delete_feature_route(
         raise HTTPException(status_code=404, detail="مسیر مدل موردنظر پیدا نشد.")
     await session.delete(route)
     await session.commit()
+    await log_admin_action(
+        session,
+        request,
+        action="route.delete",
+        target=f"route:{feature_key}",
+        payload={"provider_id": route.provider_id},
+    )
     return {"deleted": True, "feature_key": feature_key}
 
 
@@ -3324,6 +3441,7 @@ async def get_quota_policy(session: AsyncSession = Depends(get_session)) -> dict
 @protected_router.put("/quotas/features/{feature_key}")
 async def set_feature_quota_override(
     feature_key: str,
+    request: Request,
     body: QuotaPolicyBody,
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, object]:
@@ -3355,12 +3473,19 @@ async def set_feature_quota_override(
 
     flag_modified(billing, "system_config")
     await session.commit()
+    await log_admin_action(
+        session,
+        request,
+        action="quota.feature.set",
+        target=f"quota:{feature_key}",
+        payload={"fields": sorted(fields), "override": per_feature[feature_key]},
+    )
     return {"feature_key": feature_key, "override": per_feature[feature_key]}
 
 
 @protected_router.delete("/quotas/features/{feature_key}")
 async def delete_feature_quota_override(
-    feature_key: str, session: AsyncSession = Depends(get_session)
+    feature_key: str, request: Request, session: AsyncSession = Depends(get_session)
 ) -> dict[str, object]:
     from app.services.quota_service import PER_FEATURE_KEY, QUOTA_POLICY_KEY
 
@@ -3378,12 +3503,19 @@ async def delete_feature_quota_override(
 
     flag_modified(billing, "system_config")
     await session.commit()
+    await log_admin_action(
+        session,
+        request,
+        action="quota.feature.delete",
+        target=f"quota:{feature_key}",
+        payload={},
+    )
     return {"deleted": True, "feature_key": feature_key}
 
 
 @protected_router.put("/quotas")
 async def update_quota_policy(
-    body: QuotaPolicyBody, session: AsyncSession = Depends(get_session)
+    request: Request, body: QuotaPolicyBody, session: AsyncSession = Depends(get_session)
 ) -> dict[str, object]:
     """Persist a quota policy override in `billing_settings.system_config["quotas"]`."""
     from app.services.quota_service import DEFAULT_QUOTA_POLICY, QUOTA_POLICY_KEY
@@ -3405,6 +3537,13 @@ async def update_quota_policy(
 
     flag_modified(billing, "system_config")
     await session.commit()
+    await log_admin_action(
+        session,
+        request,
+        action="quota.policy.update",
+        target="quota:global",
+        payload={"policy": current},
+    )
     return {"policy": current}
 
 

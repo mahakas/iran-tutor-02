@@ -59,15 +59,29 @@ describe("AdminSideNav", () => {
     expect(scope.getByText("کتاب‌ها و پردازش PDF")).toBeInTheDocument();
     expect(scope.getByText("کاربران و سهمیه‌ها")).toBeInTheDocument();
     expect(scope.getByText("پلن‌ها و قیمت توکن")).toBeInTheDocument();
+    expect(scope.getByText("پادکست‌های آموزشی")).toBeInTheDocument();
+  });
+
+  it("every tab is a real anchor to its /admin?tab= URL (deep-linkable, refresh-safe)", () => {
+    render(<AdminSideNav active="overview" onSelect={vi.fn()} />);
+    const scope = nav();
+    for (const key of ADMIN_TAB_KEYS) {
+      const link = scope.getByText(
+        ADMIN_NAV_CATEGORIES.flatMap((c) => c.items).find((i) => i.key === key)!.label
+      ).closest("a")!;
+      expect(link).toHaveAttribute("href", `/admin?tab=${key}`);
+    }
+    // the standalone education route keeps its own URL
+    expect(scope.getByText(/مدیریت نظام آموزشی/).closest("a")).toHaveAttribute("href", "/admin/education");
   });
 
   it("marks the active tab from its prop (sourced from the URL by the page)", () => {
     render(<AdminSideNav active="users" onSelect={vi.fn()} />);
     const scope = nav();
-    const active = scope.getByText("کاربران و سهمیه‌ها").closest("button")!;
+    const active = scope.getByText("کاربران و سهمیه‌ها").closest("a")!;
     expect(active).toHaveClass("active");
     expect(active).toHaveAttribute("aria-current", "page");
-    const other = scope.getByText("پلن‌ها و قیمت توکن").closest("button")!;
+    const other = scope.getByText("پلن‌ها و قیمت توکن").closest("a")!;
     expect(other).not.toHaveClass("active");
   });
 
@@ -75,7 +89,7 @@ describe("AdminSideNav", () => {
     const user = userEvent.setup();
     const onSelect = vi.fn();
     render(<AdminSideNav active="overview" onSelect={onSelect} />);
-    await user.click(nav().getByText("مرکز شفافیت (Observability)").closest("button")!);
+    await user.click(nav().getByText("مرکز شفافیت (Observability)").closest("a")!);
     expect(onSelect).toHaveBeenCalledWith("observability");
   });
 

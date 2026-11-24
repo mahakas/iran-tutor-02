@@ -23,6 +23,24 @@ from app.services import mastery_service
 
 MISTAKE_DECK_TITLE = "اشتباهات من"
 CHOICE_KEYS = ("A", "B", "C", "D")
+ERROR_TAGS = ("wrong", "skipped")
+
+
+def _apply_scope_filters(
+    stmt,
+    *,
+    book_id: int | None,
+    chapter_number: int | None,
+    error_tag: str | None,
+):
+    """Shared optional scope filters for list and practice-set (backward compatible: all optional)."""
+    if book_id is not None:
+        stmt = stmt.where(MistakeBankItem.book_id == book_id)
+    if chapter_number is not None:
+        stmt = stmt.where(MistakeBankItem.chapter_number == chapter_number)
+    if error_tag:
+        stmt = stmt.where(MistakeBankItem.error_tag == error_tag)
+    return stmt
 
 
 def build_mistake_rows(
@@ -124,12 +142,28 @@ async def _owned(session: AsyncSession, user: User, item_id: int) -> MistakeBank
 
 
 async def list_items(
-    session: AsyncSession, user: User, *, status: str | None = None, limit: int = 50, offset: int = 0
+    session: AsyncSession,
+    user: User,
+    *,
+    status: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+    book_id: int | None = None,
+    chapter_number: int | None = None,
+    error_tag: str | None = None,
 ) -> dict[str, Any]:
     if status is not None and status not in MISTAKE_STATUSES:
         raise HTTPException(status_code=422, detail="وضعیت نامعتبر است.")
-    stmt = select(MistakeBankItem).where(MistakeBankItem.user_id == user.id)
-    count_stmt = select(func.count()).select_from(MistakeBankItem).where(MistakeBankItem.user_id == user.id)
+    if error_tag is not None and error_tag not in ERROR_TAGS:
+        raise HTTPException(status_code=422, detail="نوع خطا نامعتبر است.")
+    scope = dict(book_id=book_id, chapter_number=chapter_number, error_tag=error_tag)
+    stmt = _apply_scope_filters(
+        select(MistakeBankItem).where(MistakeBankItem.user_id == user.id), **scope
+    )
+    count_stmt = _apply_scope_filters(
+        select(func.count()).select_from(MistakeBankItem).where(MistakeBankItem.user_id == user.id),
+        **scope,
+    )
     if status:
         stmt = stmt.where(MistakeBankItem.status == status)
         count_stmt = count_stmt.where(MistakeBankItem.status == status)
@@ -140,11 +174,16 @@ async def list_items(
             .offset(offset)
         )
     ).all()
+    # Per-status counts stay scoped to the same book/chapter/error-tag filter, so the
+    # status chips stay meaningful inside a filtered view.
     counts = {
         key: int(
             await session.scalar(
-                select(func.count()).select_from(MistakeBankItem).where(
-                    MistakeBankItem.user_id == user.id, MistakeBankItem.status == key
+                _apply_scope_filters(
+                    select(func.count()).select_from(MistakeBankItem).where(
+                        MistakeBankItem.user_id == user.id, MistakeBankItem.status == key
+                    ),
+                    **scope,
                 )
             )
             or 0
@@ -158,13 +197,28 @@ async def list_items(
     }
 
 
-async def practice_set(session: AsyncSession, user: User, *, limit: int = 5) -> dict[str, Any]:
+async def practice_set(
+    session: AsyncSession,
+    user: User,
+    *,
+    limit: int = 5,
+    book_id: int | None = None,
+    chapter_number: int | None = None,
+    error_tag: str | None = None,
+) -> dict[str, Any]:
     """Unresolved items first, then practiced ones. Answer keys are not included."""
+    if error_tag is not None and error_tag not in ERROR_TAGS:
+        raise HTTPException(status_code=422, detail="نوع خطا نامعتبر است.")
+    stmt = _apply_scope_filters(
+        select(MistakeBankItem)
+        .where(MistakeBankItem.user_id == user.id, MistakeBankItem.status != "mastered"),
+        book_id=book_id,
+        chapter_number=chapter_number,
+        error_tag=error_tag,
+    )
     rows = (
         await session.scalars(
-            select(MistakeBankItem)
-            .where(MistakeBankItem.user_id == user.id, MistakeBankItem.status != "mastered")
-            .order_by(
+            stmt.order_by(
                 (MistakeBankItem.status == "practiced").asc(),
                 MistakeBankItem.created_at.asc(),
                 MistakeBankItem.id.asc(),

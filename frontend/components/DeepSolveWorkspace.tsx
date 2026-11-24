@@ -1,6 +1,8 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
+import { BookOpen, Repeat2 } from "lucide-react";
 import { useAppContext } from "@/components/AppProvider";
 import MathContent from "@/components/MathContent";
 import BookGradePicker from "@/components/BookGradePicker";
@@ -158,8 +160,23 @@ export default function DeepSolveWorkspace() {
               </div>
             </div>
           ) : (
-            <div role="status">
-              <strong>پاسخ نهایی:</strong> <MathContent content={session.final_answer ?? ""} />
+            <div role="status" style={{ display: "grid", gap: 10 }}>
+              <div>
+                <strong>پاسخ نهایی:</strong> <MathContent content={session.final_answer ?? ""} />
+              </div>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                {session.book_id ? (
+                  <Link className="btn-ghost" href={`/study/${session.book_id}`} style={{ display: "inline-flex", gap: 6, alignItems: "center", textDecoration: "none" }}>
+                    <BookOpen size={15} /> منبع در کتاب
+                  </Link>
+                ) : null}
+                <button type="button" className="btn-ghost" onClick={() => setSession(null)} style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+                  <Repeat2 size={15} /> مسئلهٔ تازه
+                </button>
+                <span style={{ fontSize: 13, opacity: 0.8 }}>
+                  این حل به‌عنوان شواهد تسلط برای فصل ثبت شد؛ در <Link href="/mastery">مسیر تسلط</Link> ببینید.
+                </span>
+              </div>
             </div>
           )}
         </section>

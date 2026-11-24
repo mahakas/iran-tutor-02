@@ -143,6 +143,8 @@ function Harness({ overrides }: { overrides?: Partial<PlayerTrack> }) {
         load
       </button>
       <button type="button" onClick={() => player.toggle()}>toggle</button>
+      <button type="button" onClick={() => player.seek(88)}>seek88</button>
+      <button type="button" onClick={() => player.setSpeed(1.5)}>speed15</button>
     </div>
   );
 }
@@ -275,6 +277,43 @@ describe("persistent playback (Phase 04B)", () => {
     await waitFor(() => expect(window.localStorage.getItem(STORAGE_KEY)).toBeNull());
   });
 
+  it("keeps the record cleared when the browser fires pause after ended (real Chromium order)", async () => {
+    // Regression: a seek to the exact end while playing makes Chromium emit
+    // pause -> ended. The pause that carries ended=true must never re-save a
+    // finished position after the ended handler cleared the record.
+    installDetailHandlers();
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(savedRecord()));
+    renderPlayer();
+    await waitFor(() => expect(screen.getByLabelText("پخش‌کنندهٔ پادکست")).toBeInTheDocument());
+    const el = lastAudio();
+    defineDuration(el, 200);
+    el.dispatchEvent(new Event("loadedmetadata"));
+    el.dispatchEvent(new Event("ended"));
+    await waitFor(() => expect(window.localStorage.getItem(STORAGE_KEY)).toBeNull());
+    Object.defineProperty(el, "ended", { configurable: true, get: () => true });
+    el.dispatchEvent(new Event("pause"));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(window.localStorage.getItem(STORAGE_KEY)).toBeNull();
+    Object.defineProperty(el, "ended", { configurable: true, get: () => false });
+  });
+
+  it("treats a saved position at the very end as finished: clears it and starts from zero", async () => {
+    // A user who seeked to the end while paused leaves a record at ~duration;
+    // the next restore must recognize "already finished" instead of resuming
+    // at a frozen end position.
+    installDetailHandlers();
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(savedRecord("student-1", { position: 199.8 })));
+    renderPlayer();
+    await waitFor(() => expect(screen.getByLabelText("پخش‌کنندهٔ پادکست")).toBeInTheDocument());
+    const el = lastAudio();
+    defineDuration(el, 200);
+    el.dispatchEvent(new Event("loadedmetadata"));
+    await waitFor(() => expect(window.localStorage.getItem(STORAGE_KEY)).toBeNull());
+    expect(el.currentTime).toBe(0);
+    // The resume banner is pointless for a finished episode: it must not show.
+    expect(screen.queryByText("ادامهٔ پخش از موقعیت قبلی")).not.toBeInTheDocument();
+  });
+
   it("never restores another user's record", async () => {
     installDetailHandlers();
     const seeded = savedRecord("student-1");
@@ -391,6 +430,79 @@ describe("persistent playback (Phase 04B)", () => {
     await userEvent.click(screen.getByRole("button", { name: "بستن پخش‌کننده" }));
     expect(window.localStorage.getItem(STORAGE_KEY)).toBeNull();
     expect(screen.queryByLabelText("پخش‌کنندهٔ پادکست")).not.toBeInTheDocument();
+  });
+});
+
+describe("playback state contract (Phase 04C)", () => {
+  it("seek writes the record with the REAL element state: playing while playing, paused while paused", async () => {
+    renderPlayer();
+    await userEvent.click(screen.getByRole("button", { name: "load" }));
+    const el = lastAudio();
+    defineDuration(el, 200);
+    el.dispatchEvent(new Event("loadedmetadata"));
+    // Seek while playing.
+    el.dispatchEvent(new Event("play"));
+    await userEvent.click(screen.getByRole("button", { name: "seek88" }));
+    const playing = JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? "{}");
+    expect(playing.position).toBe(88);
+    expect(playing.wasPlaying).toBe(true);
+    // Seek again while paused (no play event in between).
+    el.dispatchEvent(new Event("pause"));
+    await userEvent.click(screen.getByRole("button", { name: "seek88" }));
+    const paused = JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? "{}");
+    expect(paused.position).toBe(88);
+    expect(paused.wasPlaying).toBe(false);
+  });
+
+  it("pagehide and tab-hidden saves keep the real playing state", async () => {
+    renderPlayer();
+    await userEvent.click(screen.getByRole("button", { name: "load" }));
+    const el = lastAudio();
+    el.dispatchEvent(new Event("play"));
+    el.currentTime = 31;
+    // pagehide while playing -> wasPlaying must be true.
+    window.dispatchEvent(new Event("pagehide"));
+    expect(JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? "{}").wasPlaying).toBe(true);
+    // visibilitychange(hidden) while playing -> wasPlaying must be true too.
+    Object.defineProperty(document, "hidden", { configurable: true, get: () => true });
+    document.dispatchEvent(new Event("visibilitychange"));
+    Object.defineProperty(document, "hidden", { configurable: true, get: () => false });
+    expect(JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? "{}").wasPlaying).toBe(true);
+  });
+
+  it("restore never autoplays: play() runs only after the user acts", async () => {
+    installDetailHandlers();
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(savedRecord()));
+    renderPlayer();
+    await waitFor(() => expect(screen.getByLabelText("پخش‌کنندهٔ پادکست")).toBeInTheDocument());
+    const el = lastAudio();
+    defineDuration(el, 200);
+    el.dispatchEvent(new Event("loadedmetadata"));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(el.play).not.toHaveBeenCalled();
+    expect(screen.getByText("ادامهٔ پخش از موقعیت قبلی")).toBeInTheDocument();
+    // Only the user's explicit action starts playback.
+    await userEvent.click(screen.getByRole("button", { name: "ادامه" }));
+    expect(el.play).toHaveBeenCalledTimes(1);
+  });
+
+  it("loads a legacy record without wasPlaying/updatedAt and tolerates unknown fields (no migration needed)", async () => {
+    // The 04C contract analysis found wasPlaying already stores the REAL
+    // element state, so the store keeps version 1: an old record that omits
+    // the newer optional fields must still restore safely.
+    installDetailHandlers();
+    window.localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ episodeId: 11, position: 120, speed: 1.25, someFutureField: "x" }),
+    );
+    renderPlayer();
+    await waitFor(() => expect(screen.getByLabelText("پخش‌کنندهٔ پادکست")).toBeInTheDocument());
+    const el = lastAudio();
+    defineDuration(el, 200);
+    el.dispatchEvent(new Event("loadedmetadata"));
+    await waitFor(() => expect(el.currentTime).toBe(120));
+    expect(el.playbackRate).toBe(1.25);
+    expect(screen.getByText("ادامهٔ پخش از موقعیت قبلی")).toBeInTheDocument();
   });
 });
 

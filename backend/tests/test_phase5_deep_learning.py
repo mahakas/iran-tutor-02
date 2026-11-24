@@ -361,6 +361,76 @@ async def test_mistake_practice_lifecycle_and_flashcard_conversion(env):
     assert "نیرو" in card.back_md or "C)" in card.back_md
 
 
+@pytest.mark.asyncio
+async def test_mistake_bank_filters_scoped_counts_and_practice_set(env):
+    """Redesign phase 05: lesson/chapter/error-tag filters on list and practice-set."""
+    book_id = env.ids["book_id"]
+    questions = [_question("q1", chapter=1, answer="A"), _question("q2", chapter=2, answer="B"),
+                 _question("q3", chapter=2, answer="C")]
+    exam_id = await _insert_exam(env, questions)
+    async with _client() as client:
+        submit = await client.post(f"/api/v1/exams/{exam_id}/submit",
+                                   json={"answers": {"q1": "B", "q2": "A"}})  # q3 skipped
+        assert submit.status_code == 200, submit.text
+        # Unfiltered call must behave exactly as before the filters existed.
+        unfiltered = await client.get("/api/v1/mistakes")
+        assert unfiltered.status_code == 200 and unfiltered.json()["total"] == 3
+        assert unfiltered.json()["counts"]["unresolved"] == 3
+        # Chapter filter (server-side).
+        chapter2 = await client.get("/api/v1/mistakes?chapter_number=2")
+        assert chapter2.json()["total"] == 2
+        assert {item["question_id"] for item in chapter2.json()["items"]} == {"q2", "q3"}
+        # Scoped per-status counts follow the non-status filters.
+        assert chapter2.json()["counts"]["unresolved"] == 2
+        # Book + chapter combined.
+        scoped = await client.get(f"/api/v1/mistakes?book_id={book_id}&chapter_number=1")
+        assert scoped.json()["total"] == 1
+        assert scoped.json()["items"][0]["question_id"] == "q1"
+        # Error-tag filter plus status combination.
+        skipped = await client.get("/api/v1/mistakes?error_tag=skipped&status=unresolved")
+        assert skipped.json()["total"] == 1
+        assert skipped.json()["items"][0]["question_id"] == "q3"
+        # Invalid values fail closed with 422.
+        assert (await client.get("/api/v1/mistakes?error_tag=bogus")).status_code == 422
+        assert (await client.get("/api/v1/mistakes/practice-set?error_tag=bogus")).status_code == 422
+        # Practice-set honours the same filters and never leaks the key.
+        practice2 = await client.get("/api/v1/mistakes/practice-set?chapter_number=2")
+        assert {item["question_id"] for item in practice2.json()["items"]} == {"q2", "q3"}
+        assert all("correct_option" not in item for item in practice2.json()["items"])
+        practice_skipped = await client.get("/api/v1/mistakes/practice-set?error_tag=skipped")
+        assert [item["question_id"] for item in practice_skipped.json()["items"]] == ["q3"]
+
+
+@pytest.mark.asyncio
+async def test_mistake_bank_items_are_private_to_their_owner(env):
+    """Redesign phase 05: answering or converting another student's mistake must 404."""
+    from app.models.phase5 import MistakeBankItem as Item
+
+    owner_id = env.ids["student_id"]
+    other = User(phone_number="09121000099", full_name="دانش‌آموز دیگر", role="student",
+                 tokens_remaining=1000, is_active=True, grade_level=10)
+    async with env.factory() as session:
+        session.add(other)
+        await session.flush()
+        session.add(Item(user_id=other.id, exam_id="exam-other", question_id="qX", book_id=env.ids["book_id"],
+                         chapter_number=1, chapter_title="فصل 1", printed_page_number=10, topic_tag="فصل 1",
+                         error_tag="wrong", prompt="سؤال دیگری", choices_json={"A": "الف", "B": "ب"},
+                         correct_option="A", explanation="توضیح", status="unresolved"))
+        await session.commit()
+        foreign_id = (await session.scalars(select(Item.id).where(Item.user_id == other.id))).first()
+    async with _client() as client:
+        listing = await client.get("/api/v1/mistakes")
+        assert listing.json()["total"] == 0  # the list only ever shows the caller's own rows
+        answered = await client.post(f"/api/v1/mistakes/{foreign_id}/answer", json={"choice": "A"})
+        converted = await client.post(f"/api/v1/mistakes/{foreign_id}/flashcard")
+    assert answered.status_code == 404
+    assert converted.status_code == 404
+    async with env.factory() as session:
+        untouched = await session.get(Item, foreign_id)
+    assert untouched.status == "unresolved" and untouched.attempts == 0 and untouched.flashcard_card_id is None
+    assert owner_id != other.id
+
+
 # ---------------------------------------------------------------------------
 # 4. Mastery path: scores, thresholds, sequential unlock, admin overrides
 # ---------------------------------------------------------------------------

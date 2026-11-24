@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRef, useState } from "react";
 import {
   Activity,
@@ -12,6 +13,7 @@ import {
   KeyRound,
   Layers,
   Menu,
+  Mic,
   Palette,
   ShieldCheck,
   Sparkles,
@@ -35,6 +37,7 @@ export type AdminNavKey =
   | "rich_study"
   | "books"
   | "kb"
+  | "podcasts"
   | "users"
   | "plans"
   | "roles";
@@ -42,9 +45,10 @@ export type AdminNavKey =
 type NavItem = { key: AdminNavKey; label: string; icon: LucideIcon };
 type NavCategory = { title: string; items: NavItem[] };
 
-// Every tab that exists in /admin (same 15 keys as before — none added, none
-// removed). The active tab is carried in the `?tab=` query parameter so admin
-// sections are deep-linkable and survive refresh / back / forward.
+// Every tab that exists in /admin. The active tab is carried in the `?tab=`
+// query parameter so admin sections are deep-linkable and survive refresh /
+// back / forward. `podcasts` is the Phase 06 addition: a read-only view over
+// the existing admin podcast endpoints (stats + episodes), no new backend.
 export const ADMIN_TAB_KEYS: AdminNavKey[] = [
   "overview",
   "observability",
@@ -58,6 +62,7 @@ export const ADMIN_TAB_KEYS: AdminNavKey[] = [
   "rich_study",
   "books",
   "kb",
+  "podcasts",
   "users",
   "plans",
   "roles",
@@ -88,6 +93,7 @@ export const ADMIN_NAV_CATEGORIES: NavCategory[] = [
     items: [
       { key: "kb", label: "پایگاه دانش و مدل‌ها", icon: Database },
       { key: "flashcards", label: "فلش‌کارت‌ها", icon: Layers },
+      { key: "podcasts", label: "پادکست‌های آموزشی", icon: Mic },
       { key: "deep_learning", label: "یادگیری عمیق", icon: Layers },
       { key: "rich_study", label: "مطالعهٔ غنی", icon: Layers },
     ],
@@ -185,29 +191,34 @@ export default function AdminSideNav({ active, onSelect }: Props) {
             <X size={18} />
           </button>
         </div>
-        <a
+        {/* Standalone admin route (its own pages under /admin/education/*). A real
+            href so it is openable in a new tab and highlights nothing inside /admin. */}
+        <Link
           href="/admin/education"
           className="admin-nav-item admin-nav-standalone-link"
           onClick={() => setDrawerOpen(false)}
         >
           <GraduationCap size={16} /> <span>مدیریت نظام آموزشی و کاتالوگ درسی</span>
-        </a>
+        </Link>
         {ADMIN_NAV_CATEGORIES.map((category) => (
           <div className="admin-nav-group" key={category.title}>
             <span className="admin-nav-group-title">{category.title}</span>
             {category.items.map((item) => {
               const Icon = item.icon;
               const isActive = active === item.key;
+              // Real anchors: every tab is a stable /admin?tab=… URL (refresh,
+              // back/forward, open-in-new-tab and prefetch all work natively).
+              // onClick keeps the drawer-close + per-tab side-effect fetches.
               return (
-                <button
+                <Link
                   key={item.key}
-                  type="button"
+                  href={`/admin?tab=${item.key}`}
                   className={`admin-nav-item ${isActive ? "active" : ""}`}
                   aria-current={isActive ? "page" : undefined}
                   onClick={() => choose(item.key)}
                 >
                   <Icon size={16} /> <span>{item.label}</span>
-                </button>
+                </Link>
               );
             })}
           </div>

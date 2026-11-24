@@ -61,10 +61,36 @@ export type MistakeItem = {
   correct_streak: number;
   attempts: number;
   flashcard_card_id: number | null;
-  correct_option?: string | null;
 };
 
 export type MistakeList = { total: number; counts: Record<string, number>; items: MistakeItem[] };
+
+/** Error tags written by exam submission (wrong choice vs no answer). */
+export type MistakeErrorTag = "wrong" | "skipped";
+
+export const MISTAKE_ERROR_TAG_LABEL: Record<MistakeErrorTag, string> = {
+  wrong: "پاسخ نادرست",
+  skipped: "بی‌پاسخ",
+};
+
+/** Builds the mistake-bank query string from the active filters (empty string when unfiltered). */
+export function mistakeFilterQuery(filters: {
+  status: MistakeStatus | "all";
+  bookId: number | null;
+  chapterNumber: number | null;
+  errorTag: MistakeErrorTag | null;
+  practice?: boolean;
+}): string {
+  const params = new URLSearchParams();
+  if (filters.status !== "all") params.set("status", filters.status);
+  if (filters.bookId !== null) params.set("book_id", String(filters.bookId));
+  if (filters.chapterNumber !== null) params.set("chapter_number", String(filters.chapterNumber));
+  if (filters.errorTag !== null) params.set("error_tag", filters.errorTag);
+  if (filters.practice) params.set("limit", "5");
+  return params.size ? `?${params.toString()}` : "";
+}
+
+export type MasteryComponentEvidence = { correct: number; total: number };
 
 export type MasteryChapter = ImmersiveChapter & {
   score: number | null;
@@ -72,8 +98,51 @@ export type MasteryChapter = ImmersiveChapter & {
   status: "locked" | "mastered" | "in_progress" | "not_started";
   locked_reason: string | null;
   override: "locked" | "open" | null;
-  evidence: Record<string, unknown> | null;
+  evidence: Record<string, MasteryComponentEvidence> | null;
 };
+
+/**
+ * Deterministic, explainable next-step suggestion for one mastery chapter.
+ * Pure function of server data (status, score, evidence counters); no AI and no
+ * invented numbers. Returns null when no nudge is warranted (locked or mastered).
+ */
+export function nextChapterStep(
+  chapter: Pick<MasteryChapter, "status" | "score" | "threshold" | "evidence">,
+): { reason: string; label: string; href: string } | null {
+  if (chapter.status === "locked" || chapter.status === "mastered") return null;
+  const evidence = chapter.evidence ?? {};
+  const total = (key: string) => evidence[key]?.total ?? 0;
+  if (total("exam") === 0) {
+    return {
+      reason: "هنوز هیچ شواهد آزمونی برای این فصل ثبت نشده است",
+      label: "آزمون کوتاه بساز",
+      href: "/?action=new-exam",
+    };
+  }
+  if (total("solve") === 0) {
+    return {
+      reason: "شواهد آزمون ثبت شده اما حل گام‌به‌گام برای این فصل خالی است",
+      label: "حل گام‌به‌گام یک مسئله",
+      href: "/deep-solve",
+    };
+  }
+  if (total("flash") === 0) {
+    return {
+      reason: "شواهد آزمون و حل ثبت شده‌اند اما مرور فلش‌کارت برای این فصل خالی است",
+      label: "مرور فلش‌کارت‌ها",
+      href: "/flashcards",
+    };
+  }
+  const below = chapter.score === null || chapter.score < chapter.threshold;
+  if (below) {
+    return {
+      reason: "هر سه منبع شواهد فعال شده‌اند اما امتیاز فصل زیر آستانه است",
+      label: "مرور اشتباهات ثبت‌شده",
+      href: "/mistakes",
+    };
+  }
+  return null;
+}
 
 export type MasteryTree = {
   book: { id: number; title: string };
